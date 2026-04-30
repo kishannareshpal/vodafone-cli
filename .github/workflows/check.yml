@@ -11,45 +11,43 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
-  build:
-    name: Build
+  verify:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Build
+            command: pnpm build
+          - name: Types
+            command: pnpm check
+          - name: Lint
+            command: pnpm lint
+          - name: Test
+            command: pnpm test
     steps:
-      - uses: actions/checkout@v4
-      - name: Install dependencies
-        uses: ./.github/actions/setup
-      - run: pnpm build
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-  types:
-    name: Types
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install dependencies
-        uses: ./.github/actions/setup
-      - run: pnpm check
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.14.0
 
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install dependencies
-        uses: ./.github/actions/setup
-      - run: pnpm lint
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          cache: pnpm
+          node-version: 24
 
-  test:
-    name: Test 
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
       - name: Install dependencies
-        uses: ./.github/actions/setup
-      - run: pnpm test
+        run: pnpm install --frozen-lockfile
+
+      - name: Run ${{ matrix.name }}
+        run: ${{ matrix.command }}
