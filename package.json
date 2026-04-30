@@ -1,73 +1,79 @@
 {
   "name": "vodafone-cli",
-  "description": "Vodafone router CLI",
   "version": "0.0.0",
-  "author": "Kishan Jadav",
-  "bin": {
-    "vodafone-cli": "./bin/run.js"
+  "type": "module",
+  "packageManager": "pnpm@10.14.0",
+  "license": "MIT",
+  "description": "Vodafone router CLI",
+  "repository": "https://github.com/kishannareshpal/vodafone-cli",
+  "publishConfig": {
+    "access": "public",
+    "directory": "dist"
   },
-  "bugs": "https://github.com/kishannareshpal/vodafone-cli/issues",
-  "dependencies": {
-    "@oclif/core": "^4.10.6",
-    "@oclif/plugin-help": "^6.2.45",
-    "@oclif/plugin-plugins": "^5.4.62"
+  "scripts": {
+    "build": "tsup && pnpm copy-package-json",
+    "build:ts": "tsup",
+    "clean": "rimraf dist/*",
+    "check": "tsc -b tsconfig.json",
+    "lint": "eslint \"**/{src,test,examples,scripts,dtslint}/**/*.{ts,mjs}\"",
+    "lint-fix": "pnpm lint --fix",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "copy-package-json": "tsx scripts/copy-package-json.ts",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "**/{src,test,scripts}/**/*.{ts,mjs}": "eslint --fix"
   },
   "devDependencies": {
-    "@eslint/compat": "^1.4.1",
-    "@oclif/prettier-config": "^0.2.1",
-    "@oclif/test": "^4.1.18",
-    "@types/chai": "^4.3.20",
-    "@types/mocha": "^10.0.10",
-    "@types/node": "^18.19.130",
-    "chai": "^4.5.0",
-    "eslint": "^9.39.4",
-    "eslint-config-oclif": "^6.0.160",
-    "eslint-config-prettier": "^10.1.8",
-    "mocha": "^11.7.5",
-    "oclif": "^4.23.0",
-    "shx": "^0.3.4",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "@effect/cli": "^0.69.0",
+    "@effect/eslint-plugin": "^0.3.2",
+    "@effect/language-service": "latest",
+    "@effect/platform": "^0.90.3",
+    "@effect/platform-node": "^0.96.0",
+    "@effect/vitest": "^0.25.1",
+    "@eslint/compat": "1.1.1",
+    "@eslint/eslintrc": "3.1.0",
+    "@eslint/js": "9.10.0",
+    "@types/node": "^22.5.2",
+    "@typescript-eslint/eslint-plugin": "^8.4.0",
+    "@typescript-eslint/parser": "^8.4.0",
+    "effect": "^3.17.7",
+    "eslint": "^9.10.0",
+    "eslint-import-resolver-typescript": "^3.6.3",
+    "eslint-plugin-codegen": "0.28.0",
+    "eslint-plugin-import": "^2.30.0",
+    "eslint-plugin-simple-import-sort": "^12.1.1",
+    "eslint-plugin-sort-destructure-keys": "^2.0.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "rimraf": "^6.1.3",
+    "tsup": "^8.2.4",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "vitest": "^3.2.0"
   },
-  "engines": {
-    "node": ">=18.0.0"
+  "pnpm": {
+    "patchedDependencies": {}
   },
-  "files": [
-    "./bin",
-    "./dist",
-    "./oclif.manifest.json"
-  ],
+  "author": "Kishan Jadav",
+  "bugs": {
+    "url": "https://github.com/kishannareshpal/vodafone-cli/issues"
+  },
   "homepage": "https://github.com/kishannareshpal/vodafone-cli",
   "keywords": [
-    "oclif"
+    "vodafone",
+    "router",
+    "cli"
   ],
-  "license": "MIT",
-  "main": "dist/index.js",
-  "type": "module",
-  "oclif": {
-    "bin": "vodafone-cli",
-    "dirname": "vodafone-cli",
-    "commands": "./dist/commands",
-    "plugins": [
-      "@oclif/plugin-help",
-      "@oclif/plugin-plugins"
-    ],
-    "topicSeparator": " ",
-    "topics": {
-      "hello": {
-        "description": "Say hello to the world and others"
-      }
-    }
+  "bin": {
+    "vodafone-cli": "./dist/bin.cjs",
+    "vf": "./dist/bin.cjs"
   },
-  "repository": "kishannareshpal/vodafone-cli",
-  "scripts": {
-    "build": "shx rm -rf dist && tsc -b",
-    "lint": "eslint",
-    "postpack": "shx rm -f oclif.manifest.json",
-    "posttest": "pnpm run lint",
-    "prepack": "oclif manifest && oclif readme",
-    "test": "mocha --forbid-only \"test/**/*.test.ts\"",
-    "version": "oclif readme && git add README.md"
+  "dependencies": {
+    "@napi-rs/keyring": "^1.3.0"
   },
-  "types": "dist/index.d.ts"
+  "engines": {
+    "node": ">=18"
+  }
 }

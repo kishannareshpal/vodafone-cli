@@ -1,0 +1,281 @@
+name: Release Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Dry run without publishing
+        required: true
+        type: boolean
+        default: true
+      npm_tag:
+        description: NPM tag
+        required: true
+        type: choice
+        options:
+          - latest
+          - beta
+          - next
+      version:
+        description: Version override, or "auto" to auto-increment when the current version is already published
+        required: false
+        type: string
+        default: auto
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          cache: pnpm
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify
+        run: |
+          pnpm run lint
+          pnpm run check
+          pnpm test
+
+      - name: Determine package version
+        id: determine_version
+        run: |
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          CURRENT_VERSION="$(node -p "require('./package.json').version")"
+          VERSION_INPUT="${{ inputs.version }}"
+
+          if [ "$VERSION_INPUT" = "auto" ]; then
+            if npm view "$PACKAGE_NAME@$CURRENT_VERSION" version >/dev/null 2>&1; then
+              if [[ "$CURRENT_VERSION" =~ ^(.+)-beta\.([0-9]+)$ ]]; then
+                BASE="${BASH_REMATCH[1]}"
+                BETA_NUM="${BASH_REMATCH[2]}"
+                NEW_VERSION="$BASE-beta.$((BETA_NUM + 1))"
+              elif [[ "$CURRENT_VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+                MAJOR="${BASH_REMATCH[1]}"
+                MINOR="${BASH_REMATCH[2]}"
+                PATCH="${BASH_REMATCH[3]}"
+                NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
+              else
+                echo "Unable to auto-increment version: $CURRENT_VERSION"
+                exit 1
+              fi
+
+              npm version "$NEW_VERSION" --no-git-tag-version
+              echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+              echo "version_changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+              echo "version_changed=false" >> "$GITHUB_OUTPUT"
+            fi
+          elif [ -n "$VERSION_INPUT" ]; then
+            npm version "$VERSION_INPUT" --no-git-tag-version
+            echo "version=$VERSION_INPUT" >> "$GITHUB_OUTPUT"
+            echo "version_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+            echo "version_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check published version
+        id: check_published
+        run: |
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          VERSION="${{ steps.determine_version.outputs.version }}"
+
+          if npm view "$PACKAGE_NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build package
+        run: pnpm run build
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION="${{ steps.determine_version.outputs.version }}"
+          PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          REPO_URL="https://github.com/${{ github.repository }}"
+          LOG_FORMAT="%s ([%h]($REPO_URL/commit/%H)) by \`%an\`"
+
+          if [ -z "$PREV_TAG" ]; then
+            git log --pretty=format:"$LOG_FORMAT" --no-merges > commits.txt
+          else
+            git log "$PREV_TAG"..HEAD --pretty=format:"$LOG_FORMAT" --no-merges > commits.txt
+          fi
+
+          touch breaking.txt features.txt fixes.txt docs.txt chores.txt refactors.txt others.txt
+
+          while IFS= read -r commit; do
+            if [[ "$commit" =~ BREAKING[[:space:]]CHANGE ]] || [[ "$commit" =~ ^-?[[:space:]]*[[:alnum:]_]+(\(.*\))?!: ]]; then
+              echo "- $commit" >> breaking.txt
+            elif [[ "$commit" =~ ^feat(\(|:) ]]; then
+              echo "- $commit" >> features.txt
+            elif [[ "$commit" =~ ^fix(\(|:) ]]; then
+              echo "- $commit" >> fixes.txt
+            elif [[ "$commit" =~ ^docs?(\(|:) ]]; then
+              echo "- $commit" >> docs.txt
+            elif [[ "$commit" =~ ^chore(\(|:) ]]; then
+              echo "- $commit" >> chores.txt
+            elif [[ "$commit" =~ ^refactor(\(|:) ]]; then
+              echo "- $commit" >> refactors.txt
+            else
+              echo "- $commit" >> others.txt
+            fi
+          done < commits.txt
+
+          : > release_body.txt
+
+          if [ -s breaking.txt ]; then
+            echo "### Breaking Changes" >> release_body.txt
+            cat breaking.txt >> release_body.txt
+            echo "" >> release_body.txt
+          fi
+
+          if [ -s features.txt ]; then
+            echo "### Features" >> release_body.txt
+            cat features.txt >> release_body.txt
+            echo "" >> release_body.txt
+          fi
+
+          if [ -s fixes.txt ]; then
+            echo "### Bug Fixes" >> release_body.txt
+            cat fixes.txt >> release_body.txt
+            echo "" >> release_body.txt
+          fi
+
+          if [ -s refactors.txt ]; then
+            echo "### Refactors" >> release_body.txt
+            cat refactors.txt >> release_body.txt
+            echo "" >> release_body.txt
+          fi
+
+          if [ -s docs.txt ]; then
+            echo "### Documentation" >> release_body.txt
+            cat docs.txt >> release_body.txt
+            echo "" >> release_body.txt
+          fi
+
+          if [ -s chores.txt ]; then
+            echo "### Chores" >> release_body.txt
+            cat chores.txt >> release_body.txt
+            echo "" >> release_body.txt
+          fi
+
+          if [ -s others.txt ]; then
+            echo "### Other Changes" >> release_body.txt
+            cat others.txt >> release_body.txt
+            echo "" >> release_body.txt
+          fi
+
+          if [ ! -s release_body.txt ]; then
+            echo "_This version does not introduce any user-facing changes._" >> release_body.txt
+            echo "" >> release_body.txt
+          fi
+
+          if [ -n "$PREV_TAG" ]; then
+            echo "**Full Changelog**: $REPO_URL/compare/$PREV_TAG...v$VERSION" >> release_body.txt
+          fi
+
+          echo "notes_file=release_body.txt" >> "$GITHUB_OUTPUT"
+          rm -f breaking.txt commits.txt features.txt fixes.txt docs.txt chores.txt refactors.txt others.txt
+
+      - name: Update changelog
+        if: ${{ steps.determine_version.outputs.version_changed == 'true' && !inputs.dry_run }}
+        run: |
+          VERSION="${{ steps.determine_version.outputs.version }}"
+          DATE="$(date +'%Y-%m-%d')"
+
+          {
+            echo "## $VERSION - $DATE"
+            echo ""
+            cat "${{ steps.release_notes.outputs.notes_file }}"
+            echo ""
+            echo ""
+          } > new_changelog_entry.md
+
+          sed -i '/<!-- releases -->/r new_changelog_entry.md' CHANGELOG.md
+          rm new_changelog_entry.md
+
+      - name: Commit version bump
+        if: ${{ steps.determine_version.outputs.version_changed == 'true' && !inputs.dry_run }}
+        run: |
+          git add package.json CHANGELOG.md
+          git commit -m "chore: bump version to ${{ steps.determine_version.outputs.version }}" || echo "No changes to commit"
+          git push origin main
+
+      - name: Create git tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          VERSION="${{ steps.determine_version.outputs.version }}"
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin "v$VERSION"
+
+      - name: Publish to npm dry run
+        if: ${{ inputs.dry_run }}
+        working-directory: dist
+        run: |
+          echo "Dry run. Would publish version ${{ steps.determine_version.outputs.version }} with tag ${{ inputs.npm_tag }}."
+          npm pack --dry-run
+
+      - name: Publish to npm
+        if: ${{ !inputs.dry_run && steps.check_published.outputs.published == 'false' }}
+        working-directory: dist
+        run: npm publish --tag ${{ inputs.npm_tag }}
+
+      - name: Create GitHub release dry run
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "Dry run. Would create GitHub release v${{ steps.determine_version.outputs.version }}."
+          cat "${{ steps.release_notes.outputs.notes_file }}"
+
+      - name: Create GitHub release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.determine_version.outputs.version }}"
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes-file "${{ steps.release_notes.outputs.notes_file }}" \
+            --verify-tag
+
+      - name: Summary
+        run: |
+          echo "# Release Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Version: \`${{ steps.determine_version.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- NPM tag: \`${{ inputs.npm_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Dry run: \`${{ inputs.dry_run }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Already published: \`${{ steps.check_published.outputs.published }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          cat "${{ steps.release_notes.outputs.notes_file }}" >> "$GITHUB_STEP_SUMMARY"
