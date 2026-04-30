@@ -3,6 +3,12 @@
 CLI for reading Vodafone router information from the local admin UI.
 
 ```sh
+npm i -g vodafone-cli
+```
+
+or:
+
+```sh
 npm install -g vodafone-cli
 ```
 
@@ -15,6 +21,15 @@ The short alias is also available:
 
 ```sh
 vf devices list --json
+```
+
+Example output:
+
+```text
+Name          IP             MAC                Connection  SSID          Signal
+Work MacBook  192.168.1.42   AA:BB:CC:DD:EE:01 Wi-Fi       Vodafone1234  -48 dBm
+Desk PC       192.168.1.87   AA:BB:CC:DD:EE:02 Ethernet    -             -
+Pixel 8       192.168.1.91   AA:BB:CC:DD:EE:03 Wi-Fi       Vodafone1234  -61 dBm
 ```
 
 ## Configuration
@@ -38,3 +53,11 @@ pnpm run check
 pnpm run lint
 pnpm run build
 ```
+
+`pnpm install` runs Husky setup through the `prepare` script. The pre-commit hook runs `lint-staged`.
+
+## Release
+
+Use the `Release Package` GitHub Actions workflow for versioned npm releases. A non-dry run verifies the package, builds `dist`, publishes to npm, tags the commit, and creates the GitHub Release.
+
+Publishing an existing GitHub Release also runs the same workflow. The release tag must match `package.json`, for example `v1.0.0`.

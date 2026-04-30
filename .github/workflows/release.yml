@@ -1,6 +1,8 @@
 name: Release Package
 
 on:
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -16,6 +18,7 @@ on:
           - latest
           - beta
           - next
+        default: latest
       version:
         description: Version override, or "auto" to auto-increment when the current version is already published
         required: false
@@ -39,6 +42,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install pnpm
@@ -56,6 +60,30 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Determine release mode
+        id: release_mode
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            RELEASE_TAG="${{ github.event.release.tag_name }}"
+            RELEASE_VERSION="${RELEASE_TAG#v}"
+
+            if [ "${{ github.event.release.prerelease }}" = "true" ]; then
+              NPM_TAG="beta"
+            else
+              NPM_TAG="latest"
+            fi
+
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+            echo "github_release_exists=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
+            echo "version_input=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+          else
+            echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
+            echo "github_release_exists=false" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=${{ inputs.npm_tag }}" >> "$GITHUB_OUTPUT"
+            echo "version_input=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -70,9 +98,17 @@ jobs:
         run: |
           PACKAGE_NAME="$(node -p "require('./package.json').name")"
           CURRENT_VERSION="$(node -p "require('./package.json').version")"
-          VERSION_INPUT="${{ inputs.version }}"
+          VERSION_INPUT="${{ steps.release_mode.outputs.version_input }}"
 
-          if [ "$VERSION_INPUT" = "auto" ]; then
+          if [ "${{ steps.release_mode.outputs.github_release_exists }}" = "true" ]; then
+            if [ "$VERSION_INPUT" != "$CURRENT_VERSION" ]; then
+              echo "Release tag v$VERSION_INPUT does not match package.json version $CURRENT_VERSION"
+              exit 1
+            fi
+
+            echo "version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+            echo "version_changed=false" >> "$GITHUB_OUTPUT"
+          elif [ "$VERSION_INPUT" = "auto" ]; then
             if npm view "$PACKAGE_NAME@$CURRENT_VERSION" version >/dev/null 2>&1; then
               if [[ "$CURRENT_VERSION" =~ ^(.+)-beta\.([0-9]+)$ ]]; then
                 BASE="${BASH_REMATCH[1]}"
@@ -210,7 +246,7 @@ jobs:
           rm -f breaking.txt commits.txt features.txt fixes.txt docs.txt chores.txt refactors.txt others.txt
 
       - name: Update changelog
-        if: ${{ steps.determine_version.outputs.version_changed == 'true' && !inputs.dry_run }}
+        if: ${{ steps.determine_version.outputs.version_changed == 'true' && steps.release_mode.outputs.dry_run != 'true' && steps.release_mode.outputs.github_release_exists != 'true' }}
         run: |
           VERSION="${{ steps.determine_version.outputs.version }}"
           DATE="$(date +'%Y-%m-%d')"
@@ -227,39 +263,39 @@ jobs:
           rm new_changelog_entry.md
 
       - name: Commit version bump
-        if: ${{ steps.determine_version.outputs.version_changed == 'true' && !inputs.dry_run }}
+        if: ${{ steps.determine_version.outputs.version_changed == 'true' && steps.release_mode.outputs.dry_run != 'true' && steps.release_mode.outputs.github_release_exists != 'true' }}
         run: |
           git add package.json CHANGELOG.md
           git commit -m "chore: bump version to ${{ steps.determine_version.outputs.version }}" || echo "No changes to commit"
           git push origin main
 
       - name: Create git tag
-        if: ${{ !inputs.dry_run }}
+        if: ${{ steps.release_mode.outputs.dry_run != 'true' && steps.release_mode.outputs.github_release_exists != 'true' }}
         run: |
           VERSION="${{ steps.determine_version.outputs.version }}"
           git tag -a "v$VERSION" -m "Release v$VERSION"
           git push origin "v$VERSION"
 
       - name: Publish to npm dry run
-        if: ${{ inputs.dry_run }}
+        if: ${{ steps.release_mode.outputs.dry_run == 'true' }}
         working-directory: dist
         run: |
-          echo "Dry run. Would publish version ${{ steps.determine_version.outputs.version }} with tag ${{ inputs.npm_tag }}."
+          echo "Dry run. Would publish version ${{ steps.determine_version.outputs.version }} with tag ${{ steps.release_mode.outputs.npm_tag }}."
           npm pack --dry-run
 
       - name: Publish to npm
-        if: ${{ !inputs.dry_run && steps.check_published.outputs.published == 'false' }}
+        if: ${{ steps.release_mode.outputs.dry_run != 'true' && steps.check_published.outputs.published == 'false' }}
         working-directory: dist
-        run: npm publish --tag ${{ inputs.npm_tag }}
+        run: npm publish --tag ${{ steps.release_mode.outputs.npm_tag }}
 
       - name: Create GitHub release dry run
-        if: ${{ inputs.dry_run }}
+        if: ${{ steps.release_mode.outputs.dry_run == 'true' && steps.release_mode.outputs.github_release_exists != 'true' }}
         run: |
           echo "Dry run. Would create GitHub release v${{ steps.determine_version.outputs.version }}."
           cat "${{ steps.release_notes.outputs.notes_file }}"
 
       - name: Create GitHub release
-        if: ${{ !inputs.dry_run }}
+        if: ${{ steps.release_mode.outputs.dry_run != 'true' && steps.release_mode.outputs.github_release_exists != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -274,8 +310,9 @@ jobs:
           echo "# Release Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Version: \`${{ steps.determine_version.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- NPM tag: \`${{ inputs.npm_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Dry run: \`${{ inputs.dry_run }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- NPM tag: \`${{ steps.release_mode.outputs.npm_tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Dry run: \`${{ steps.release_mode.outputs.dry_run }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GitHub release already existed: \`${{ steps.release_mode.outputs.github_release_exists }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Already published: \`${{ steps.check_published.outputs.published }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           cat "${{ steps.release_notes.outputs.notes_file }}" >> "$GITHUB_STEP_SUMMARY"
